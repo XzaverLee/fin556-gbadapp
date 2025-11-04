@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import useDapp, { getBalance, sellTokens, buyTokens } from "./useDapp";
-import { parseEther } from "ethers";
+import { ethers, parseEther } from "ethers";
 
 import {
     CssBaseline,
@@ -79,6 +79,8 @@ const App = () => {
         const wallet = async() => {
             const addr = await signer.getAddress();
             setAddress(addr);
+            const bal = await signer.provider.getBalance(addr);
+            setWalletBalance(ethers.formatEther(bal));
             const net = await signer.provider.getNetwork();
             const networkMap = {
                 1: "Ethereum Mainnet",
@@ -91,23 +93,7 @@ const App = () => {
             setNetwork(`${NetworkName} (chainId: ${net.chainId})`);
         };
         wallet();
-    },[signer])
-
-    const [WETHDetails, setWETHDetails] = useState(null);
-    useEffect(() => {
-        if (!WETHAddress || !address || !uniswapFactoryAddress) return;
-        
-        getBalance({
-            TokenAddr: WETHAddress,
-            walletAddr: address,
-            uniswapFactoryAddress,
-        }).then(setWETHDetails);
-    }, [WETHAddress, address, uniswapFactoryAddress, refreshToggle]);
-
-    useEffect(() => {
-        const bal = WETHDetails?.balance
-        setWalletBalance(bal)
-    },[WETHDetails, refreshToggle])
+    },[signer, refreshToggle])
         
 
     const [TokenDetailsX, setTokenDetailsX] = useState(null);
@@ -168,24 +154,34 @@ const App = () => {
         [TokenDetailsM?.name]: tokenAddrM, 
         [TokenDetailsSY?.name]: tokenAddrSY, 
         [TokenDetailsKH?.name]: tokenAddrKH,
-        "WETH": WETHAddress,
+        "ETH": "NativeETH",
     };
 
     const [FromTokenAddr, setFromTokenAddr] = useState("");
+    const [FromTokenName, setFromTokenName] = useState("");
     const [ToTokenAddr, setToTokenAddr] = useState("");
+    const [ToTokenName, setToTokenName] = useState("");
     const [isLoadingBuy, setIsLoadingBuy] = useState(false);
     const [isLoadingSell, setIsLoadingSell] = useState(false);
     const [Tokenamt, setTokenamt] = useState("");
 
     const handleFromChange = (event) => {
         setFromTokenAddr(event.target.value);
+        const TokenName = Object.entries(TokenNames).find(
+            ([name, addr]) => addr === event.target.value
+        )?.[0] || '';
+        setFromTokenName(TokenName);
     }
     const handleToChange = (event) => {
         setToTokenAddr(event.target.value);
+        const TokenName = Object.entries(TokenNames).find(
+            ([name, addr]) => addr === event.target.value
+        )?.[0] || '';
+        setToTokenName(TokenName);
     }
 
     const handleRefresh = async () => {
-        setWETHDetails(null);
+        setWalletBalance(null);
         setTokenDetailsG(null);
         setTokenDetailsKH(null);
         setTokenDetailsX(null);
@@ -199,25 +195,42 @@ const App = () => {
             alert("Invalid amount");
             return;
         }
-        setIsLoadingBuy(true);
-        try {
-            const Inamt = await buyTokens(
-                uniswapFactoryAddress, 
-                uniswapRouterAddress, 
-                WETHAddress,
-                FromTokenAddr,
-                parseEther(Tokenamt),
-                ToTokenAddr,
-                signer
-            );
-            console.log(`Sold ${parseEther(Tokenamt)} of ${FromTokenAddr} for ${Inamt} of ${ToTokenAddr}`);
+        if (FromTokenAddr === ToTokenAddr) {
+            alert("Please choose different Tokens!");
             return;
-        } catch (error) {
-            console.error("Error buying tokens:", error);
-            alert("Failed to buy tokens. Please try again.");
-        } finally {
-            setIsLoadingBuy(false);
         }
+        if (FromTokenAddr === "" || ToTokenAddr ==="") {
+            alert("Please select Tokens to Trade");
+            return;
+        }
+        const confirmed = window.confirm(
+            `Proceed to Buy ${Tokenamt} ${ToTokenName}?`
+        )
+        if (confirmed) {   
+            
+            console.log("User confirmed Purchase. Sending Transaction...");
+            setIsLoadingBuy(true);
+            try {
+                const Inamt = await buyTokens(
+                    uniswapFactoryAddress, 
+                    uniswapRouterAddress, 
+                    WETHAddress,
+                    FromTokenAddr,
+                    parseEther(Tokenamt),
+                    ToTokenAddr,
+                    signer
+                );
+                console.log(`Bought ${parseEther(Tokenamt)} of ${ToTokenAddr} for ${Inamt} of ${FromTokenAddr}`);
+                return;
+            } catch (error) {
+                console.error("Error buying tokens:", error);
+                alert("Failed to buy tokens. Please try again.");
+            } finally {
+                setIsLoadingBuy(false);
+            }
+        } else {
+            console.log("Swap cancelled by user.");
+        };
     };
 
     const handleSell = async () => {
@@ -225,25 +238,42 @@ const App = () => {
             alert("Invalid amount");
             return;
         }
-        setIsLoadingSell(true);
-        try {
-            const Outamt = await sellTokens(
-                uniswapFactoryAddress, 
-                uniswapRouterAddress, 
-                WETHAddress,
-                parseEther(Tokenamt),
-                FromTokenAddr,
-                ToTokenAddr,
-                signer
-            );
-            console.log(`Sold ${parseEther(Tokenamt)} of ${FromTokenAddr} for ${Outamt} of ${ToTokenAddr}`);
+        if (FromTokenAddr === ToTokenAddr) {
+            alert("Please choose different Tokens!");
             return;
-        } catch (error) {
-            console.error("Error selling tokens:", error);
-            alert("Failed to sell tokens. Please try again.");
-        } finally {
-            setIsLoadingSell(false);
         }
+        if (FromTokenAddr === "" || ToTokenAddr ==="") {
+            alert("Please select Tokens to Trade");
+            return;
+        }
+        const confirmed = window.confirm(
+            `Proceed to Sell ${Tokenamt} ${FromTokenName}?`
+        )
+        if (confirmed) {   
+            
+            console.log("User confirmed Sale. Sending Transaction...");
+            setIsLoadingSell(true);
+            try {
+                const Outamt = await sellTokens(
+                    uniswapFactoryAddress, 
+                    uniswapRouterAddress, 
+                    WETHAddress,
+                    parseEther(Tokenamt),
+                    FromTokenAddr,
+                    ToTokenAddr,
+                    signer
+                );
+                console.log(`Sold ${parseEther(Tokenamt)} of ${FromTokenAddr} for ${Outamt} of ${ToTokenAddr}`);
+                return;
+            } catch (error) {
+                console.error("Error selling tokens:", error);
+                alert("Failed to sell tokens. Please try again.");
+            } finally {
+                setIsLoadingSell(false);
+            }
+        } else {
+            console.log("Swap cancelled by user.");
+        };
     };
 
     return (
@@ -253,7 +283,7 @@ const App = () => {
             <h1>GROUP 2 DAPP</h1>
             <p>Connected to Metamask with address: {address || "Loading..."}</p>
             <p>Network: {network || "Loading..."}</p>
-            <p>Wallet WETH Balance: {walletbalance || "Loading..."} WETH</p>
+            <p>Wallet Balance: {walletbalance || "Loading..."} ETH</p>
             <h2 style={{ marginBottom: "16px" }}>Contract Configuration (UniswapV2Router02)</h2>
             <Box sx={{ display: "flex", gap: 2, mb: 2 }}>
                 <h4 style={{ marginTop: "20px", marginBottom: "5px" }}>

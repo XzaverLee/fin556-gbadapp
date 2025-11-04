@@ -188,7 +188,8 @@ export const sellTokens = async (
     account
 ) => {
     console.log(`Selling ${inputAmt} of ${inputAddr} for ${outputAddr}`);
-
+    const slippage = 1n; // 1%
+ 
     const provider = window.ethereum
         ? new ethers.BrowserProvider(window.ethereum)
         : null;
@@ -208,33 +209,44 @@ export const sellTokens = async (
         uniswapRouterAddress,
         [
             `function swapExactTokensForTokens(uint,uint,address[],address,uint)`,
+            `function swapExactETHForTokens(uint,address[],address,uint)`,
+            `function swapExactTokensForETH(uint,uint,address[],address,uint)`
         ],
         account
     );
+    const walletAddr = await account.getAddress();
+    let inputToken, inputbal;
+    if (inputAddr !== "NativeETH") {
+        inputToken = new ethers.Contract(
+            inputAddr,
+            [
+                "function approve(address,uint)",
+                "function balanceOf(address account) view returns (uint256)"
+            ],
+            account
+        );
 
-    const inputToken = new ethers.Contract(
-        inputAddr,
-        [
-            "function approve(address,uint)",
-            "function balanceOf(address account) view returns (uint256)"
-        ],
-        account
-    );
-
-    const inputbal = await inputToken.balanceOf(await account.getAddress())
-
-    if (inputAmt > inputbal) {
-        alert("Insufficient Token Balance to sell!");
-        return;
+        inputbal = await inputToken.balanceOf(walletAddr);
+    } else {
+        inputbal = await account.provider.getBalance(walletAddr);
     }
+    if (inputAmt > inputbal) {
+        alert("Insufficient Balance to sell!");
+        return;
+    };
+    
 
-    let amountOut, path, response;
-    if (inputAddr === wethAddr || outputAddr === wethAddr) {
+    let amountOut, amountOutMin, path, response, ts;
+    
+
+        // Get OutputAmt
+    if (inputAddr === "NativeETH") {
+
         const reserves = await _getReserves(
             factory,
             wethAddr,
             {
-                TOKEN_0: inputAddr,
+                TOKEN_0: wethAddr,
                 TOKEN_1: outputAddr,
             },
             account
@@ -245,34 +257,58 @@ export const sellTokens = async (
         if (!reserves || !reserves.WETHReserve || !reserves.TokenReserve) {
             throw new Error("Failed to fetch reserves from the pool");
         }
-
-        // Get OutputAmt
-        if (inputAddr === wethAddr) {
-            amountOut = await _getAmountOut(
-                inputAmt,
-                reserves.WETHReserve,
-                reserves.TokenReserve,
-            );
-            
-            if (amountOut > reserves.TokenReserve) {
-                alert("Insufficient Token Reserves in pool to buy!");
-                return;
-            }
-        } else {
-            amountOut = await _getAmountOut(
-                inputAmt,
-                reserves.TokenReserve,
-                reserves.WETHReserve,
-            );
-            if (amountOut > reserves.WETHReserve) {
-                alert("Insufficient WETH Reserves in pool to buy!");
-                return;
-            }
-        }
-        path = [inputAddr, outputAddr];
-
-        // Approve router to withdraw from trader account
+        amountOut = await _getAmountOut(
+            inputAmt,
+            reserves.WETHReserve,
+            reserves.TokenReserve,
+        );
         
+        if (amountOut > reserves.TokenReserve) {
+            alert("Insufficient Token Reserves in pool to buy!");
+            return;
+        };
+        console.log(
+            `Getting ${amountOut} of ${outputAddr} for selling ${inputAmt} of ${inputAddr}`
+        )
+        path = [wethAddr, outputAddr];
+        amountOutMin = amountOut * (100n - slippage) / 100n;
+        const overrides = {
+            value: inputAmt
+        };
+        ts = (await provider.getBlock()).timestamp + 1000;
+        await uniswap.swapExactETHForTokens(
+            amountOutMin,
+            path,
+            walletAddr,
+            ts,
+            overrides
+        );
+    } else if (outputAddr === "NativeETH") {
+
+        const reserves = await _getReserves(
+            factory,
+            wethAddr,
+            {
+                TOKEN_0: inputAddr,
+                TOKEN_1: wethAddr,
+            },
+            account
+        );
+
+        console.log("Reserves:", reserves);
+
+        if (!reserves || !reserves.WETHReserve || !reserves.TokenReserve) {
+            throw new Error("Failed to fetch reserves from the pool");
+        }
+        amountOut = await _getAmountOut(
+            inputAmt,
+            reserves.TokenReserve,
+            reserves.WETHReserve,
+        );
+        if (amountOut > reserves.WETHReserve) {
+            alert("Insufficient WETH Reserves in pool to buy!");
+            return;
+        }; 
         response = await inputToken.approve(
             uniswapRouterAddress,
             inputAmt
@@ -280,6 +316,25 @@ export const sellTokens = async (
         await response.wait();
         console.log("trade: approved. receipt=", response.hash);
 
+        console.log(
+            `Approve router ${uniswapRouterAddress} to spend ${inputAmt} of ${inputAddr}`
+        );
+        console.log(
+            `Getting ${amountOut} of ${outputAddr} for selling ${inputAmt} of ${inputAddr}`
+        )
+        path = [inputAddr, wethAddr];
+        amountOutMin = amountOut * (100n - slippage) / 100n;
+        ts = (await provider.getBlock()).timestamp + 1000;
+        await uniswap.swapExactTokensForETH(
+            inputAmt,
+            amountOutMin,
+            path,
+            walletAddr,
+            ts,
+            { value: 0},
+        )
+    
+ 
     } else {
         const reservesIn = await _getReserves(
             factory,
@@ -343,29 +398,28 @@ export const sellTokens = async (
         );
         await response.wait();
         console.log("trade: approved. receipt=", response.hash);
+        console.log(
+            `Approve router ${uniswapRouterAddress} to spend ${inputAmt} of ${inputAddr}`
+        );
+
+        // Load contract A and contract B
+        console.log(
+            `Getting ${amountOut} of ${outputAddr} for selling ${inputAmt} of ${inputAddr}`
+        )
+        
+        
+        amountOutMin = amountOut * (100n - slippage) / 100n;
+
+        // Trade Token using trader account
+        ts = (await provider.getBlock()).timestamp + 1000;
+        await uniswap.swapExactTokensForTokens(
+            inputAmt,
+            amountOutMin,
+            path,
+            walletAddr,
+            ts
+        );
     }
-
-    // Load contract A and contract B
-    console.log(
-        `Approve router ${uniswapRouterAddress} to spend ${inputAmt} of ${inputAddr}`
-    );
-    console.log(
-        `Getting ${amountOut} of ${outputAddr} for selling ${inputAmt} of ${inputAddr}`
-    )
-    
-    const slippage = 1n; // 1%
-    const amountOutMin = amountOut * (100n - slippage) / 100n;
-
-    // Trade Token using trader account
-    const ts = (await provider.getBlock()).timestamp + 1000;
-    await uniswap.swapExactTokensForTokens(
-        inputAmt,
-        amountOutMin,
-        path,
-        await account.getAddress(),
-        ts
-    );
-
     return amountOut;
 };
 
@@ -391,7 +445,7 @@ export const buyTokens = async (
     account
 ) => {
     console.log(`Buying ${outputAmt} of ${outputAddr} for ${inputAddr}`);
-
+    const slippage = 1010n; // 1%
     const provider = window.ethereum
         ? new ethers.BrowserProvider(window.ethereum)
         : null;
@@ -411,26 +465,34 @@ export const buyTokens = async (
         uniswapRouterAddress,
         [
             `function swapTokensForExactTokens(uint,uint,address[],address,uint)`,
+            `function swapETHForExactTokens(uint, address[], address, uint)`,
+            'function swapTokensForExactETH(uint, uint, address[], address, uint)'
         ],
         account
     );
-
-    const inputToken = new ethers.Contract(
-        inputAddr,
-        [
-            "function approve(address,uint)",
-            "function balanceOf(address account) view returns (uint256)"
-        ],
-        account
-    );   
-
-    let amountIn, path, response;
-    if (inputAddr === wethAddr || outputAddr === wethAddr) {
+    let inputbal, inputToken;
+    const walletAddr = await account.getAddress();
+    if (inputAddr !== "NativeETH") {
+        inputToken = new ethers.Contract(
+            inputAddr,
+            [
+                "function approve(address,uint)",
+                "function balanceOf(address account) view returns (uint256)"
+            ],
+            account
+        );   
+        inputbal = await inputToken.balanceOf(walletAddr)
+    } else {
+        inputbal = await account.provider.getBalance(walletAddr);
+    }
+    let amountIn, path, response, amountInMax, ts ;        
+        
+    if (inputAddr === "NativeETH") {
         const reserves = await _getReserves(
             factory,
             wethAddr,
             {
-                TOKEN_0: inputAddr,
+                TOKEN_0: wethAddr,
                 TOKEN_1: outputAddr,
             },
             account
@@ -441,36 +503,76 @@ export const buyTokens = async (
         if (!reserves || !reserves.WETHReserve || !reserves.TokenReserve) {
             throw new Error("Failed to fetch reserves from the pool");
         };
+
+        if (outputAmt > reserves.TokenReserve) {
+            alert("Insufficient Token Reserves in pool to buy!");
+            return
+        };
+        amountIn = await _getAmountIn(
+            reserves.WETHReserve,
+            outputAmt,  
+            reserves.TokenReserve,
+        );
         
-        // Get OutputAmt
-        if (inputAddr === wethAddr) {
-            if (outputAmt > reserves.TokenReserve) {
-                alert("Insufficient Token Reserves in pool to buy!");
-                return
-            };
-            amountIn = await _getAmountIn(
-                reserves.WETHReserve,
-                outputAmt,  
-                reserves.TokenReserve,
-            );
-        } else {
-            if (outputAmt > reserves.WETHReserve) {
-                alert("Insufficient WETH Reserves in pool to buy!");
-                return;
-            };
-            amountIn = await _getAmountIn(
-                reserves.TokenReserve,
-                outputAmt,
-                reserves.WETHReserve,
-            );
+        console.log(
+            `Buying ${outputAmt} of ${outputAddr} using ${amountIn} of ${inputAddr}`
+        )
+        
+        path = [wethAddr, outputAddr]
+        amountInMax = (amountIn * slippage) / 1000n;
+        
+
+        if (amountInMax > inputbal) {
+            alert("Insufficient Token Balance to sell!");
+            return;
         }
-        const inputbal = await inputToken.balanceOf(await account.getAddress())
+        const overrides = {
+            value: amountInMax
+        }
+        // Trade Token using trader account
+        const ts = (await provider.getBlock()).timestamp + 1000;
+        await uniswap.swapETHForExactTokens(
+            outputAmt,
+            path,
+            walletAddr,
+            ts,
+            overrides
+        );
+
+
+    } else if (outputAddr === "NativeETH") {
+        const reserves = await _getReserves(
+            factory,
+            wethAddr,
+            {
+                TOKEN_0: wethAddr,
+                TOKEN_1: inputAddr,
+            },
+            account
+        );
+
+        console.log("Reserves:", reserves);
+
+        if (!reserves || !reserves.WETHReserve || !reserves.TokenReserve) {
+            throw new Error("Failed to fetch reserves from the pool");
+        };
+        if (outputAmt > reserves.WETHReserve) {
+            alert("Insufficient WETH Reserves in pool to buy!");
+            return;
+        };
+        amountIn = await _getAmountIn(
+            reserves.TokenReserve,
+            outputAmt,
+            reserves.WETHReserve,
+        );
+        
+
 
         if (amountIn > inputbal) {
             alert("Insufficient Token Balance to sell!");
             return;
         }
-        path = [inputAddr, outputAddr];
+        path = [inputAddr, wethAddr];
 
         // Approve router to withdraw from trader account
         
@@ -480,6 +582,30 @@ export const buyTokens = async (
         );
         await response.wait();
         console.log("trade: approved. receipt=", response.hash);
+
+        console.log(
+            `Approve router ${uniswapRouterAddress} to spend ${amountIn} of ${inputAddr}`
+        );
+        console.log(
+            `Buying ${outputAmt} of ${outputAddr} using ${amountIn} of ${inputAddr}`
+        )
+        
+        
+        amountInMax = (amountIn * slippage) / 1000n;
+
+        if (amountInMax > inputbal) {
+            alert("Insufficient Token Balance to sell!");
+            return;
+        }
+        // Trade Token using trader account
+        const ts = (await provider.getBlock()).timestamp + 1000;
+        await uniswap.swapTokensForExactETH(
+            outputAmt,
+            amountInMax,
+            path,
+            walletAddr,
+            ts
+        );
 
     } else {
         const reservesIn = await _getReserves(
@@ -544,34 +670,33 @@ export const buyTokens = async (
         );
         await response.wait();
         console.log("trade: approved. receipt=", response.hash);
+
+        // Load contract A and contract B
+        console.log(
+            `Approve router ${uniswapRouterAddress} to spend ${amountIn} of ${inputAddr}`
+        );
+        console.log(
+            `Buying ${outputAmt} of ${outputAddr} using ${amountIn} of ${inputAddr}`
+        )
+        
+        
+        amountInMax = (amountIn * slippage) / 1000n;
+
+
+        if (amountInMax > inputbal) {
+            alert("Insufficient Token Balance to sell!");
+            return;
+        }
+        // Trade Token using trader account
+        ts = (await provider.getBlock()).timestamp + 1000;
+        await uniswap.swapTokensForExactTokens(
+            outputAmt,
+            amountInMax,
+            path,
+            walletAddr,
+            ts
+        );
     };
-
-    // Load contract A and contract B
-    console.log(
-        `Approve router ${uniswapRouterAddress} to spend ${amountIn} of ${inputAddr}`
-    );
-    console.log(
-        `Buying ${outputAmt} of ${outputAddr} using ${amountIn} of ${inputAddr}`
-    )
-    
-    const slippage = 1010n; // 1%
-    const amountInMax = (amountIn * slippage) / 1000n;
-    const inputbal = await inputToken.balanceOf(await account.getAddress())
-
-    if (amountInMax > inputbal) {
-        alert("Insufficient Token Balance to sell!");
-        return;
-    }
-    // Trade Token using trader account
-    const ts = (await provider.getBlock()).timestamp + 1000;
-    await uniswap.swapTokensForExactTokens(
-        outputAmt,
-        amountInMax,
-        path,
-        await account.getAddress(),
-        ts
-    );
-
     return amountIn;
     
 };
